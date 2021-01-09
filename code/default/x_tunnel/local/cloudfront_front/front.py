@@ -11,9 +11,9 @@ from front_base.http_dispatcher import HttpsDispatcher
 from front_base.connect_manager import ConnectManager
 from front_base.check_ip import CheckIp
 
-from connect_creator import ConnectCreator
-from config import Config
-import host_manager
+from .connect_creator import ConnectCreator
+from .config import Config
+from . import host_manager
 from gae_proxy.local import check_local_network
 
 
@@ -28,7 +28,7 @@ class Front(object):
 
     def __init__(self):
         self.running = True
-        self.last_host = "center.xx-net.net"
+        self.last_host = "www.xx-net.net"
 
         self.logger = logger
         config_path = os.path.join(module_data_path, "cloudfront_front.json")

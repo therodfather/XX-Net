@@ -124,7 +124,7 @@ def format_response(status, headers, content):
         headers['Content-Length'] = str(len(content))
     data = 'HTTP/1.1 %d %s\r\n%s\r\n\r\n%s' % \
             (status,
-             httplib.responses.get(status,'Unknown'),
+             httplib.responses.get(status, 'Unknown'),
              '\r\n'.join('%s: %s' % (k.title(), v) for k, v in headers.items()),
              content)
     data = deflate(data)
