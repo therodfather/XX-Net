@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding:utf-8
 
-import os
+import os, stat
 import json
 import time
 import threading
@@ -11,17 +11,22 @@ import platform
 import uuid
 from distutils.version import LooseVersion
 
-from xlog import getLogger
-xlog = getLogger("launcher")
-from config import config
-import update_from_github
-import urllib.request, urllib.error, urllib.parse
-import utils
+try:
+    from urllib.request import build_opener, HTTPSHandler, ProxyHandler
+except ImportError:
+    from urllib2 import build_opener, HTTPSHandler, ProxyHandler
 
 try:
     reduce         # Python 2
 except NameError:  # Python 3
     from functools import reduce
+
+import utils
+from xlog import getLogger
+xlog = getLogger("launcher")
+from config import config, app_name
+import update_from_github
+
 
 update_url = "https://xxnet-update.appspot.com/update.json"
 
@@ -36,20 +41,20 @@ data_root = os.path.abspath(os.path.join(root_path, os.pardir, os.pardir, 'data'
 
 
 def get_opener():
-    autoproxy = '127.0.0.1:8087'
+    autoproxy = '127.0.0.1:8086'
 
-    import ssl
-    if getattr(ssl, "create_default_context", None):
-        cafile = os.path.join(data_root, "gae_proxy", "CA.crt")
-        if not os.path.isfile(cafile):
-            cafile = None
-        context = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH,
-                                             cafile=cafile)
-        https_handler = urllib.request.HTTPSHandler(context=context)
-
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': autoproxy, 'https': autoproxy}), https_handler)
-    else:
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': autoproxy, 'https': autoproxy}))
+    # import ssl
+    # if getattr(ssl, "create_default_context", None):
+    #     cafile = os.path.join(data_root, "gae_proxy", "CA.crt")
+    #     if not os.path.isfile(cafile):
+    #         cafile = None
+    #     context = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH,
+    #                                          cafile=cafile)
+    #     https_handler = HTTPSHandler(context=context)
+    #
+    #     opener = build_opener(ProxyHandler({'http': autoproxy, 'https': autoproxy}), https_handler)
+    # else:
+    opener = build_opener(ProxyHandler({'http': autoproxy, 'https': autoproxy}))
     return opener
 
 
@@ -237,13 +242,18 @@ def check_update():
         if update_from_github.update_info == "dont-check":
             return
 
-        check_push_update()
+        # check_push_update()  # server broken
 
         update_rule = config.check_update
         if update_rule not in ("stable", "notice-stable", "test", "notice-test"):
             return
 
-        versions = update_from_github.get_github_versions()
+        try:
+            versions = update_from_github.get_github_versions()
+        except Exception as e:
+            xlog.warn("check_update get version failed. e:%r", e)
+            return
+
         current_version = update_from_github.current_version()
         test_version, stable_version = versions[0][1], versions[1][1]
         if test_version != config.skip_test_version:
@@ -265,7 +275,7 @@ def check_update():
                     xlog.info("update to stable version %s", stable_version)
                     update_from_github.update_version(stable_version)
     except IOError as e:
-        xlog.warn("check update fail:%r", e)
+        xlog.exception("check update fail:%r", e)
     except Exception as e:
         xlog.exception("check_update fail:%r", e)
     finally:
@@ -282,9 +292,10 @@ def check_push_update():
                   + "&version=" + update_from_github.current_version() \
                   + "&platform=" + platform.platform()
         try:
-            update_content = opener.open(req_url).read()
+            res = opener.open(req_url)
+            update_content = res.read()
         except Exception as e:
-            xlog.exception("check_update fail:%r", e)
+            xlog.exception("check_update get content fail:%r", e)
             return False
 
         update_dict = json.loads(utils.to_str(update_content))
@@ -302,21 +313,43 @@ def create_desktop_shortcut():
     os.chdir(work_path)
 
     if sys.platform.startswith("linux"):
-        if os.getenv("DESKTOP_SESSION", "unknown") != "unknown":  # make sure this is desktop linux
+        def create_xwindows_shortcut():
+            if os.getenv("DESKTOP_SESSION", "unknown") == "unknown":  # make sure this is desktop linux
+                return
+
+            desktop_path = os.path.join(os.path.join(os.path.expanduser('~')), 'Desktop')
+            if not os.path.isdir(desktop_path):
+                return
+
             xxnet_path = os.path.abspath(os.path.join(root_path, os.pardir, os.pardir))
-            cmd = 'env XXNETPATH="' + xxnet_path + '" "' + work_path + '/create_shortcut_linux.sh"'
-            os.system(cmd)
+            content = "[Desktop Entry]\n" + \
+                      "Version=1.0\n" + \
+                      "Type=Application\n" + \
+                      "Name=" + app_name + "\n" +\
+                      "Comment=\n" + \
+                      "Exec=sh -c \"" + xxnet_path + "/start\"\n" + \
+                      "Icon=" + xxnet_path + "/code/default/launcher/web_ui/img/" + app_name + "/favicon.ico\n" + \
+                      "Path=\n" + \
+                      "Terminal=false\n" + \
+                      "StartupNotify=false\n"
+
+            fp = os.path.join(desktop_path, app_name + ".desktop")
+            with open(fp, "w") as fd:
+                fd.write(content)
+            os.chmod(fp, 0o0744)
+
+        create_xwindows_shortcut()
 
     elif sys.platform == "win32":
         # import ctypes
         # msg = u"是否在桌面创建图标？"
-        # title = u"XX-Net 叉叉网"
+        # title = app_name
         #res = ctypes.windll.user32.MessageBoxW(None, msg, title, 1)
         # Yes:1 No:2
         #if res == 2:
         #    return
 
-        subprocess.call(["Wscript.exe", "//E:JScript", "create_shortcut.js"], shell=False)
+        subprocess.call(["Wscript.exe", "//E:JScript", "create_shortcut.js", app_name], shell=False)
 
 
 def notify_install_tcpz_for_winXp():

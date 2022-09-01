@@ -1,8 +1,12 @@
 import time
 import socket
 import struct
-import urllib.parse
 import select
+
+try:
+    from urllib.parse import urlparse
+except ImportError:
+    from urlparse import urlparse
 
 import utils
 from xlog import getLogger
@@ -230,12 +234,12 @@ class Socks5Server():
             xlog.warn("socks5 protocol error:%r", e)
             return
 
-        socks_version = data[0]
+        socks_version = ord(data[0:1])
         if socks_version != 5:
             xlog.warn("request version:%d error", socks_version)
             return
 
-        command = data[1]
+        command = ord(data[1:2])
         if command != 1:  # 1. Tcp connect
             xlog.warn("request not supported command mode:%d", command)
             sock.send(b"\x05\x07\x00\x01")  # Command not supported
@@ -336,7 +340,7 @@ class Socks5Server():
         #    xlog.warn("https req method not known:%s", method)
 
         if url.startswith(b"http://") or url.startswith(b"HTTP://"):
-            o = urllib.parse.urlparse(url)
+            o = urlparse(url)
             host, port = netloc_to_host_port(o.netloc)
 
             p = url[7:].find(b"/")

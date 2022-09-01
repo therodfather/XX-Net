@@ -1,12 +1,17 @@
 #!/usr/bin/env python
 # coding:utf-8
 
-import urllib.parse
+
+try:
+    from urllib.parse import urlparse, parse_qs
+except ImportError:
+    from urlparse import urlparse, parse_qs
+
 import os
-import cgi
 import time
 import hashlib
 import threading
+import json
 
 import utils
 from xlog import getLogger
@@ -18,8 +23,28 @@ from . import proxy_session
 from .tls_relay_front import web_control as tls_relay_web
 
 current_path = os.path.dirname(os.path.abspath(__file__))
-root_path = os.path.abspath(os.path.join(current_path, os.pardir, os.pardir))
+default_path = os.path.abspath(os.path.join(current_path, os.pardir, os.pardir))
+root_path = os.path.abspath(os.path.join(default_path, os.pardir, os.pardir))
 web_ui_path = os.path.join(current_path, os.path.pardir, "web_ui")
+
+
+def check_email(email):
+    import re
+    if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+        return False
+    else:
+        return True
+
+
+def get_lang():
+    app_info_file = os.path.join(root_path, "data", "launcher", "config.json")
+    try:
+        with open(app_info_file, "r") as fd:
+            dat = json.load(fd)
+        return dat.get("language", "en")
+    except Exception as e:
+        xlog.exception("get version fail:%r", e)
+    return "en"
 
 
 class ControlHandler(simple_http_server.HttpServerHandler):
@@ -32,7 +57,7 @@ class ControlHandler(simple_http_server.HttpServerHandler):
         self.wfile = wfile
 
     def do_GET(self):
-        path = urllib.parse.urlparse(self.path).path
+        path = urlparse(self.path).path
         if path == "/log":
             return self.req_log_handler()
         elif path == "/debug":
@@ -86,7 +111,7 @@ class ControlHandler(simple_http_server.HttpServerHandler):
     def do_POST(self):
         xlog.debug('x-tunnel web_control %s %s %s ', self.address_string(), self.command, self.path)
 
-        path = urllib.parse.urlparse(self.path).path
+        path = urlparse(self.path).path
         if path == '/login':
             return self.req_login_handler()
         elif path == "/logout":
@@ -99,6 +124,8 @@ class ControlHandler(simple_http_server.HttpServerHandler):
             return self.req_order_handler()
         elif path == "/transfer":
             return self.req_transfer_handler()
+        elif path == "/reset_password":
+            return self.req_reset_password()
         elif path.startswith("/cloudflare_front/"):
             path = path[17:]
             from .cloudflare_front import web_control as cloudflare_web
@@ -136,8 +163,8 @@ class ControlHandler(simple_http_server.HttpServerHandler):
             return self.send_not_found()
 
     def req_log_handler(self):
-        req = urllib.parse.urlparse(self.path).query
-        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        req = urlparse(self.path).query
+        reqs = parse_qs(req, keep_blank_values=True)
         data = ''
 
         if reqs["cmd"]:
@@ -168,8 +195,8 @@ class ControlHandler(simple_http_server.HttpServerHandler):
                 "res": "login_process"
             })
 
-        req = urllib.parse.urlparse(self.path).query
-        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        req = urlparse(self.path).query
+        reqs = parse_qs(req, keep_blank_values=True)
 
         force = False
         if 'force' in reqs:
@@ -211,13 +238,6 @@ class ControlHandler(simple_http_server.HttpServerHandler):
         self.response_json(res_arr)
 
     def req_login_handler(self):
-        def check_email(email):
-            import re
-            if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-                return False
-            else:
-                return True
-
         username    = str(self.postvars['username'][0])
         #username = utils.get_printable(username)
         password    = str(self.postvars['password'][0])
@@ -226,6 +246,7 @@ class ControlHandler(simple_http_server.HttpServerHandler):
 
         pa = check_email(username)
         if not pa:
+            xlog.warn("login with invalid email: %s", username)
             return self.response_json({
                 "res": "fail",
                 "reason": "Invalid email."
@@ -269,18 +290,72 @@ class ControlHandler(simple_http_server.HttpServerHandler):
 
         return self.response_json(res_arr)
 
+    def req_reset_password(self):
+        app_name = proxy_session.get_app_name()
+        account = self.postvars.get('username', [""])[0]
+        stage = self.postvars.get('stage', [""])[0]
+        code = self.postvars.get('code', [""])[0]
+        xlog.info("reset password, stage:%s", stage)
+
+        if stage == "request_reset_password":
+            res, info = proxy_session.call_api("/request_reset_password", {
+                "account": account,
+                "app_id": app_name,
+                "lang": get_lang(),
+            })
+            if not res:
+                xlog.warn("request reset password fail:%s", info)
+                threading.Thread(target=proxy_session.update_quota_loop).start()
+                return self.response_json({"res": "fail", "reason": info})
+
+            self.response_json(info)
+
+        elif stage == "reset_password_check":
+            res, info = proxy_session.call_api("/reset_password_check", {
+                "account": account,
+                "code": code,
+                "app_id": app_name,
+                "lang": get_lang(),
+            })
+            if not res:
+                xlog.warn("reset password check fail:%s", info)
+                threading.Thread(target=proxy_session.update_quota_loop).start()
+                return self.response_json({"res": "fail", "reason": info})
+
+            self.response_json(info)
+
+        elif stage == "change_password":
+            password = self.postvars.get('password', [""])[0]
+            password_hash = str(hashlib.sha256(utils.to_bytes(password)).hexdigest())
+            res, info = proxy_session.call_api("/change_password", {
+                "account": account,
+                "code": code,
+                "password": password_hash,
+                "app_id": app_name,
+                "lang": get_lang(),
+            })
+            if not res:
+                xlog.warn("change password fail:%s", info)
+                threading.Thread(target=proxy_session.update_quota_loop).start()
+                return self.response_json({"res": "fail", "reason": info})
+
+            self.response_json(info)
+        else:
+            self.response_json({"res": "fail", "reason": "wrong stage"})
+
     def req_logout_handler(self):
         g.config.login_account = ""
         g.config.login_password = ""
         g.config.save()
 
-        g.session.stop()
+        if g.session:
+            g.session.stop()
 
         return self.response_json({"res": "success"})
 
     def req_config_handler(self):
-        req = urllib.parse.urlparse(self.path).query
-        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        req = urlparse(self.path).query
+        reqs = parse_qs(req, keep_blank_values=True)
 
         def is_server_available(server):
             if g.selectable and server == '':
@@ -406,8 +481,8 @@ class ControlHandler(simple_http_server.HttpServerHandler):
         self.response_json({"res": "success"})
 
     def req_get_history_handler(self):
-        req = urllib.parse.urlparse(self.path).query
-        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        req = urlparse(self.path).query
+        reqs = parse_qs(req, keep_blank_values=True)
 
         req_info = {
             "account": g.config.login_account,

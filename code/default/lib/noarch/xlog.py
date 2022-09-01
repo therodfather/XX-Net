@@ -8,8 +8,8 @@ import threading
 import json
 import shutil
 
-#reload(sys)
-#sys.setdefaultencoding('utf8')
+from six import string_types
+
 import utils
 
 CRITICAL = 50
@@ -23,7 +23,8 @@ NOTSET = 0
 
 
 class Logger():
-    def __init__(self, name, buffer_size=0, file_name=None, roll_num=1):
+    def __init__(self, name, buffer_size=0, file_name=None, roll_num=1,
+                 log_path=None, save_start_log=0, save_warning_log=False):
         self.name = str(name)
         self.file_max_size = 1024 * 1024
         self.buffer_lock = threading.Lock()
@@ -37,6 +38,24 @@ class Logger():
         if file_name:
             self.set_file(file_name)
 
+        self.log_path = log_path
+        self.save_start_log = save_start_log
+        self.save_warning_log = save_warning_log
+        self.start_log_num = 0
+        if log_path and save_start_log:
+            now = datetime.now()
+            time_str = now.strftime("%Y-%m-%d_%H-%M-%S")
+            log_fn = os.path.join(log_path, "start_log_%s_%s.log" % (name, time_str))
+            self.start_log = open(log_fn, "w")
+        else:
+            self.start_log = None
+
+        if log_path and save_warning_log:
+            log_fn = os.path.join(log_path, "%s_warning.log" % (name))
+            self.warning_log = open(log_fn, "a")
+        else:
+            self.warning_log = None
+
     def set_buffer(self, buffer_size):
         with self.buffer_lock:
             self.buffer_size = buffer_size
@@ -47,6 +66,26 @@ class Logger():
                         del self.buffer[i]
                     except:
                         pass
+
+    def reset_log_files(self):
+        if self.start_log:
+            self.start_log.close()
+            self.start_log = None
+
+        if self.log_path:
+            for filename in os.listdir(self.log_path):
+                if not filename.startswith("start_log_") and filename not in ["error.log"]:
+                    continue
+
+                fp = os.path.join(self.log_path, filename)
+                try:
+                    os.remove(fp)
+                except:
+                    pass
+
+        if self.warning_log:
+            self.warning_log.truncate(0)
+            self.warning_log.seek(0)
 
     def setLevel(self, level):
         if level == "DEBUG":
@@ -143,6 +182,25 @@ class Logger():
                     self.log_fd = open(self.log_filename, "w")
                     self.file_size = 0
 
+            if self.start_log:
+                self.start_log.write(string)
+                try:
+                    self.start_log.flush()
+                except:
+                    pass
+                self.start_log_num += 1
+
+                if self.start_log_num > self.save_start_log:
+                    self.start_log.close()
+                    self.start_log = None
+
+            if self.warning_log and level in ["WARN", "ERROR", "CRITICAL"]:
+                self.warning_log.write(string)
+                try:
+                    self.warning_log.flush()
+                except:
+                    pass
+
             if self.buffer_size:
                 self.last_no += 1
                 self.buffer[self.last_no] = string
@@ -203,7 +261,7 @@ class Logger():
         jd = {}
         if buffer_len > 0:
             for i in range(first_no, self.last_no + 1):
-                jd[i] = self.unicode_line(self.buffer[i])
+                jd[i] = utils.to_str(self.buffer[i])
         self.buffer_lock.release()
         return json.dumps(jd)
     
@@ -216,21 +274,9 @@ class Logger():
 
         if self.last_no >= from_no:
             for i in range(from_no, self.last_no + 1):
-                jd[i] = self.unicode_line(self.buffer[i])
+                jd[i] = utils.to_str(self.buffer[i])
         self.buffer_lock.release()
         return json.dumps(jd)
-
-    def unicode_line(self, line):
-        try:
-            if type(line) is str:
-                return line
-            else:
-                return str(line, errors='ignore')
-        except Exception as e:
-            print(("unicode err:%r" % e))
-            print(("line can't decode:%s" % line))
-            print(("Except stack:%s" % traceback.format_exc()))
-            return ""
 
 
 class null():
@@ -251,7 +297,8 @@ class null():
 loggerDict = {}
 
 
-def getLogger(name=None, buffer_size=0, file_name=None, roll_num=1):
+def getLogger(name=None, buffer_size=0, file_name=None, roll_num=1,
+              log_path=None, save_start_log=0, save_warning_log=False):
     global loggerDict, default_log
     if name is None:
         for n in loggerDict:
@@ -260,7 +307,7 @@ def getLogger(name=None, buffer_size=0, file_name=None, roll_num=1):
     if name is None:
         name = u"default"
 
-    if not isinstance(name, str):
+    if not isinstance(name, string_types):
         raise TypeError('A logger name must be string or Unicode')
     if isinstance(name, bytes):
         name = name.decode('utf-8')
@@ -268,10 +315,15 @@ def getLogger(name=None, buffer_size=0, file_name=None, roll_num=1):
     if name in loggerDict:
         return loggerDict[name]
     else:
-        logger_instance = Logger(name, buffer_size, file_name, roll_num)
+        logger_instance = Logger(name, buffer_size, file_name, roll_num, log_path, save_start_log, save_warning_log)
         loggerDict[name] = logger_instance
         default_log = logger_instance
         return logger_instance
+
+
+def reset_log_files():
+    for name, log in loggerDict.items():
+        log.reset_log_files()
 
 
 default_log = getLogger()

@@ -18,7 +18,7 @@ import winreg as winreg
 import win32_proxy_manager
 import module_init
 import update
-from config import config
+from config import config, app_name
 
 from xlog import getLogger
 xlog = getLogger("launcher")
@@ -30,8 +30,8 @@ lang_code, code_page = locale.getdefaultlocale()
 
 class Win_tray():
     def __init__(self):
-        icon_path = os.path.join(os.path.dirname(__file__), "web_ui", "favicon.ico")
-        self.systray = SysTrayIcon(icon_path, "XX-Net", self.make_menu(), self.on_quit, left_click=self.on_show, right_click=self.on_right_click)
+        icon_path = os.path.join(os.path.dirname(__file__), "web_ui", "img", app_name, "favicon.ico")
+        self.systray = SysTrayIcon(icon_path, app_name, self.make_menu(), self.on_quit, left_click=self.on_show, right_click=self.on_right_click)
 
         reg_path = r'Software\Microsoft\Windows\CurrentVersion\Internet Settings'
         self.INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_ALL_ACCESS)
@@ -39,11 +39,11 @@ class Win_tray():
         proxy_setting = config.os_proxy_mode
         if proxy_setting == "pac":
             self.on_enable_pac()
-        elif proxy_setting == "gae":
+        elif proxy_setting == "gae" and config.enable_gae_proxy == 1:
             self.on_enable_gae_proxy()
-        elif proxy_setting == "x_tunnel":
+        elif proxy_setting == "x_tunnel" and config.enable_x_tunnel == 1:
             self.on_enable_x_tunnel()
-        elif proxy_setting == "smart_router":
+        elif proxy_setting == "smart_router" and config.enable_smart_router == 1:
             self.on_enable_smart_router()
         elif proxy_setting == "disable":
             # Don't disable proxy setting, just do nothing.
@@ -166,7 +166,7 @@ class Win_tray():
         webbrowser.open("http://127.0.0.1:%s/" % host_port)
         ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
 
-    def on_quit(self, widget, data=None):
+    def on_quit(self, widget=None, data=None):
         if self.get_proxy_state() != "unknown":
             win32_proxy_manager.disable_proxy()
 

@@ -1,8 +1,18 @@
-
 import select
-import urllib.parse
+
+from xlog import getLogger
+xlog = getLogger("simple_http_client")
+
+try:
+    # py3
+    from urllib.parse import urlparse, urlsplit
+    from http.client import IncompleteRead
+except ImportError:
+    # py2
+    from urlparse import urlparse, urlsplit
+    from httplib import IncompleteRead
+
 import socket
-import http.client
 import time
 import os
 import utils
@@ -42,21 +52,24 @@ class BaseResponse(object):
 
 
 class TxtResponse(BaseResponse):
-    def __init__(self, buffer):
+    def __init__(self, buf):
         BaseResponse.__init__(self)
-        if isinstance(buffer, memoryview):
-            self.view = buffer
-            self.read_buffer = buffer.tobytes()
-        elif isinstance(buffer, str):
-            self.read_buffer = utils.to_bytes(buffer)
+        if isinstance(buf, memoryview):
+            self.view = buf
+            self.read_buffer = buf.tobytes()
+        elif isinstance(buf, str):
+            self.read_buffer = utils.to_bytes(buf)
             self.view = memoryview(self.read_buffer)
-        elif isinstance(buffer, bytes):
-            self.read_buffer = buffer
-            self.view = memoryview(buffer)
+        elif isinstance(buf, bytes):
+            self.read_buffer = buf
+            self.view = memoryview(buf)
         else:
             raise Exception("TxtResponse error")
 
         self.buffer_start = 0
+        self.version = None
+        self.info = None
+        self.body = None
         self.parse()
 
     def read_line(self):
@@ -92,7 +105,7 @@ class TxtResponse(BaseResponse):
         for line in lines:
             p = line.find(b":")
             key = line[0:p]
-            value = line[p+2:]
+            value = line[p + 2:]
             key = str(key.title())
             self.headers[key] = value
 
@@ -102,83 +115,83 @@ class TxtResponse(BaseResponse):
 
 
 class Response(BaseResponse):
-    def __init__(self, ssl_sock):
+
+    def __init__(self, sock):
         BaseResponse.__init__(self)
-        self.connection = ssl_sock
-        ssl_sock.settimeout(1)
+        self.sock = sock
+        self.sock.settimeout(1)
+        self.sock.setblocking(0)
         self.read_buffer = b""
         self.buffer_start = 0
         self.chunked = False
+        self.version = None
+        self.content_length = None
 
-    def read_line(self, timeout=60):
+    def recv(self, to_read=8192, timeout=30.0):
+        if timeout < 0:
+            raise Exception("recv timeout")
+
         start_time = time.time()
-        sock = self.connection
-        sock.setblocking(0)
-        try:
-            while True:
-                n1 = self.read_buffer.find(b"\r\n", self.buffer_start)
-                if n1 > -1:
-                    line = self.read_buffer[self.buffer_start:n1]
-                    self.buffer_start = n1 + 2
-                    return line
+        end_time = start_time + timeout
+        while time.time() < end_time:
+            try:
+                return self.sock.recv(to_read)
+            except socket.error as e:
+                if e.errno in [2, 11, 35, 10035]:
+                    time_left = end_time - time.time()
+                    if time_left < 0:
+                        break
 
-                if time.time() - start_time > timeout:
-                    raise socket.timeout()
-                time.sleep(0.001)
-                try:
-                    data = sock.recv(8192)
-                except socket.error as e:
-                    # logging.exception("e:%r", e)
-                    if e.errno in [2, 11, 10035]:
-                        #time.sleep(0.1)
-                        time_left = start_time + timeout - time.time()
-                        r, w, e = select.select([sock], [], [], time_left)
-                        continue
-                    else:
-                        raise e
-
-                if isinstance(data, int):
+                    select.select([self.sock], [], [self.sock], time_left)
                     continue
-                if data and len(data):
-                    self.read_buffer += data
-        finally:
-            sock.setblocking(1)
+                else:
+                    raise e
 
-    def read_headers(self, timeout=60):
+        raise Exception("recv timeout")
+
+    def read_line(self, timeout=60.0):
         start_time = time.time()
-        sock = self.connection
-        sock.setblocking(0)
-        try:
-            while True:
-                n1 = self.read_buffer.find(b"\r\n\r\n", self.buffer_start)
-                if n1 > -1:
-                    block = self.read_buffer[self.buffer_start:n1]
-                    self.buffer_start = n1 + 4
-                    return block
+        end_time = start_time + timeout
+        while True:
+            n1 = self.read_buffer.find(b"\r\n", self.buffer_start)
+            if n1 > -1:
+                line = self.read_buffer[self.buffer_start:n1]
+                self.buffer_start = n1 + 2
+                return line
 
-                if time.time() - start_time > timeout:
-                    raise socket.timeout()
+            if time.time() > end_time:
+                raise socket.timeout()
 
-                time.sleep(0.001)
-                try:
-                    data = sock.recv(8192)
-                except socket.error as e:
-                    # logging.exception("e:%r", e)
-                    if e.errno in [2, 11, 10035]:
-                        time.sleep(0.1)
-                        continue
-                    else:
-                        raise e
+            time_left = end_time - time.time()
+            data = self.recv(8192, time_left)
 
+            if isinstance(data, int):
+                continue
+            if data and len(data):
                 self.read_buffer += data
-        except Exception as e:
-            print(e)
-        finally:
-            sock.setblocking(1)
+            else:
+                time_left = end_time - time.time()
+                if time_left < 0:
+                    raise socket.error
 
-    def begin(self, timeout=60):
+                r, w, e = select.select([self.sock], [], [self.sock], time_left)
+                if e:
+                    raise socket.error
+
+    def read_headers(self, timeout=60.0):
         start_time = time.time()
-        line = self.read_line(500)
+        lines = []
+        while True:
+            left_time = timeout - (time.time() - start_time)
+            line = self.read_line(left_time)
+            if len(line.strip()) == 0:
+                return b"\r\n".join(lines)
+
+            lines.append(line)
+
+    def begin(self, timeout=60.0):
+        start_time = time.time()
+        line = self.read_line(timeout)
 
         requestline = line.rstrip(b'\r\n')
         words = requestline.split()
@@ -197,23 +210,20 @@ class Response(BaseResponse):
         for line in lines:
             p = line.find(b":")
             key = line[0:p]
-            value = line[p+2:]
+            value = line[p + 2:]
             key = key.title()
             self.headers[key] = value
 
         self.content_length = self.getheader(b"content-length", b"")
         if b"chunked" in self.getheader(b"Transfer-Encoding", b""):
             self.chunked = True
-            self.chunk_list = []
 
         if b"gzip" in self.getheader(b"Transfer-Encoding", b""):
-            print("not work")
+            print("gzip not work")
 
     def _read_plain(self, read_len, timeout):
         if read_len == 0:
             return ""
-        #elif read_len > 0:
-        #    return self._read_size(read_len, timeout)
 
         if read_len is not None and len(self.read_buffer) - self.buffer_start > read_len:
             out_str = self.read_buffer[self.buffer_start:self.buffer_start + read_len]
@@ -223,10 +233,10 @@ class Response(BaseResponse):
                 self.buffer_start = 0
             return out_str
 
-        self.connection.setblocking(0)
         start_time = time.time()
+        end_time = start_time + timeout
         out_len = len(self.read_buffer) - self.buffer_start
-        out_list = [ self.read_buffer[self.buffer_start:] ]
+        out_list = [self.read_buffer[self.buffer_start:]]
 
         self.read_buffer = b""
         self.buffer_start = 0
@@ -243,21 +253,22 @@ class Response(BaseResponse):
                 to_read = min(to_read, 65535)
             else:
                 to_read = 65535
-            try:
-                data = self.connection.recv(to_read)
-            except socket.error as e:
-                # logging.exception("e:%r", e)
-                if e.errno in [2, 11, 10035]:
-                    #time.sleep(0.1)
-                    time_left = start_time + timeout - time.time()
-                    r, w, e = select.select([self.connection], [], [], time_left)
-                    continue
-                else:
-                    raise e
+
+            time_left = end_time - time.time()
+            data = self.recv(to_read, time_left)
 
             if data:
                 out_list.append(data)
                 out_len += len(data)
+            else:
+                time_left = start_time + timeout - time.time()
+                if time_left < 0:
+                    raise socket.error
+
+                r, w, e = select.select([self.sock], [], [self.sock], time_left)
+                if e:
+                    raise socket.error
+
         if read_len is not None and out_len < read_len:
             raise socket.timeout()
 
@@ -273,7 +284,6 @@ class Response(BaseResponse):
                 self.buffer_start = 0
             return out_str
 
-        self.connection.setblocking(0)
         start_time = time.time()
         out_len = len(self.read_buffer) - self.buffer_start
         out_bytes = bytearray(read_len)
@@ -291,13 +301,14 @@ class Response(BaseResponse):
             to_read = min(to_read, 65535)
 
             try:
-                nbytes = self.connection.recv_into(view[out_len:], to_read)
+                nbytes = self.sock.recv_into(view[out_len:], to_read)
             except socket.error as e:
-                # logging.exception("e:%r", e)
-                if e.errno in [2, 11, 10035]:
-                    # time.sleep(0.1)
+                if e.errno in [2, 11, 35, 10035]:
                     time_left = start_time + timeout - time.time()
-                    r, w, e = select.select([self.connection], [], [], time_left)
+                    if time_left < 0:
+                        raise socket.timeout
+
+                    select.select([self.sock], [], [self.sock], time_left)
                     continue
                 else:
                     raise e
@@ -315,9 +326,6 @@ class Response(BaseResponse):
         return dat[:-2]
 
     def read(self, read_len=None, timeout=60):
-        #if not read_len and self.content_length is not None:
-        #    read_len = int(self.content_length)
-
         if not self.chunked:
             data = self._read_plain(read_len, timeout)
         else:
@@ -348,13 +356,13 @@ class Client(object):
     def __init__(self, proxy=None, timeout=60, cert=""):
         self.timeout = timeout
         self.cert = cert
-        self.connection = None
+        self.sock = None
         self.host = None
         self.port = None
         self.tls = None
 
         if isinstance(proxy, str):
-            proxy_sp = urllib.parse.urlsplit(proxy)
+            proxy_sp = urlsplit(proxy)
 
             self.proxy = {
                 "type": proxy_sp.scheme,
@@ -368,7 +376,8 @@ class Client(object):
         else:
             self.proxy = None
 
-    def direct_connect(self, host, port):
+    @staticmethod
+    def direct_connect(host, port):
         connect_timeout = 30
 
         if b':' in host:
@@ -384,6 +393,7 @@ class Client(object):
 
         for res in info:
             af, socktype, proto, canonname, sa = res
+            ip_port = (sa[0], sa[1])
             s = None
             try:
                 s = socket.socket(af, socktype, proto)
@@ -394,20 +404,23 @@ class Client(object):
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32 * 1024)
                 s.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, True)
                 s.settimeout(connect_timeout)
-                s.connect((host, port))
+                s.connect(ip_port)
                 return s
-            except socket.error:
+            except socket.error as e:
+                xlog.warn("direct connect %s except:%r", sa, e)
                 if s:
                     s.close()
 
         return None
 
     def connect(self, host, port, tls):
-        if self.connection and host == self.host and port == self.port and self.tls == tls:
-            return self.connection
+        if self.sock and host == self.host and port == self.port and self.tls == tls:
+            return self.sock
 
         if not self.proxy:
             sock = self.direct_connect(host, port)
+            if not sock:
+                return None
         else:
             connect_timeout = 5
 
@@ -421,10 +434,9 @@ class Client(object):
                            password=self.proxy["pass"])
 
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32*1024)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32 * 1024)
             sock.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, True)
             sock.settimeout(connect_timeout)
-
             sock.connect((host, port))
 
             # conn_time = time.time() - start_time
@@ -436,20 +448,22 @@ class Client(object):
             else:
                 sock = ssl.wrap_socket(sock)
 
-        self.connection = sock
+        self.sock = sock
         self.host = host
         self.port = port
         self.tls = tls
 
         return sock
 
-    def request(self, method, url, headers={}, body=b"", read_payload=True):
+    def request(self, method, url, headers=None, body=b"", read_payload=True):
+        if headers is None:
+            headers = {}
         method = utils.to_bytes(method)
         url = utils.to_bytes(url)
 
-        upl = urllib.parse.urlsplit(url)
-        headers[b"Content-Length"] = str(len(body))
-        headers[b"Host"] = upl.netloc
+        upl = urlsplit(url)
+        headers["Content-Length"] = str(len(body))
+        headers["Host"] = upl.netloc
         port = upl.port
         if not port:
             if upl.scheme == b"http":
@@ -466,7 +480,12 @@ class Client(object):
         if upl.query:
             path += b"?" + upl.query
 
-        sock = self.connect(upl.hostname, port, upl.scheme == b"https")
+        try:
+            sock = self.connect(upl.hostname, port, upl.scheme == b"https")
+        except Exception as e:
+            xlog.warn("connect %s:%s fail:%r", upl.hostname, port, e)
+            return None
+
         if not sock:
             return None
 
@@ -500,7 +519,7 @@ class Client(object):
         response.begin(timeout=self.timeout)
 
         if response.status != 200:
-            #logging.warn("status:%r", response.status)
+            # logging.warn("status:%r", response.status)
             return response
 
         if not read_payload:
@@ -511,7 +530,7 @@ class Client(object):
             while True:
                 try:
                     data = response.read(8192, timeout=self.timeout)
-                except http.client.IncompleteRead as e:
+                except IncompleteRead as e:
                     data = e.partial
                 except Exception as e:
                     raise e
@@ -524,17 +543,18 @@ class Client(object):
             response.text = b"".join(data_buffer)
             return response
         else:
-            content_length = int(response.getheader(b'Content-Length', 0))
+            content_length = int(response.getheader(b'Content-Length', b"0"))
             if content_length:
                 response.text = response.read(content_length, timeout=self.timeout)
 
             return response
 
 
-def request(method="GET", url=None, headers={}, body="", proxy=None, timeout=60, read_payload=True):
+def request(method="GET", url=None, headers=None, body=b"", proxy=None, timeout=60, read_payload=True):
+    if headers is None:
+        headers = {}
     if not url:
         raise Exception("no url")
 
     client = Client(proxy, timeout=timeout)
     return client.request(method, url, headers, body, read_payload)
-

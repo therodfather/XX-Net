@@ -1,5 +1,4 @@
-
-import queue
+from six.moves import queue as Queue
 import threading
 
 from .http_common import *
@@ -32,7 +31,7 @@ class Http1Worker(HttpWorker):
         self.trace_time.append([ssl_sock.create_time, "connect"])
         self.record_active("init")
 
-        self.task_queue = queue.Queue()
+        self.task_queue = Queue.Queue()
         threading.Thread(target=self.work_loop).start()
         self.idle_cb()
 
@@ -126,8 +125,8 @@ class Http1Worker(HttpWorker):
             self.last_send_time = time_now
             self.last_recv_time = time_now
 
-            if self.processed_tasks > self.config.http1_max_process_tasks:
-                self.close("lift end.")
+            if self.processed_tasks > self.config.http1_max_process_tasks or self.is_life_end():
+                self.close("lift end")
                 return
 
     def request_task(self, task):

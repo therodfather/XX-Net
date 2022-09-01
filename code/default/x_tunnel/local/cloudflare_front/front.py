@@ -1,7 +1,12 @@
 import os
 
+current_path = os.path.dirname(os.path.abspath(__file__))
+root_path = os.path.abspath(os.path.join(current_path, os.pardir, os.pardir, os.pardir))
+data_path = os.path.abspath(os.path.join(root_path, os.pardir, os.pardir, 'data'))
+module_data_path = os.path.join(data_path, 'x_tunnel')
+
 import xlog
-logger = xlog.getLogger("cloudflare_front")
+logger = xlog.getLogger("cloudflare_front", log_path=module_data_path, save_start_log=500, save_warning_log=True)
 logger.set_buffer(500)
 
 from .config import Config
@@ -17,22 +22,20 @@ from .http2_connection import CloudflareHttp2Worker
 from gae_proxy.local import check_local_network
 
 
-current_path = os.path.dirname(os.path.abspath(__file__))
-root_path = os.path.abspath(os.path.join(current_path, os.pardir, os.pardir, os.pardir))
-data_path = os.path.abspath(os.path.join(root_path, os.pardir, os.pardir, 'data'))
-module_data_path = os.path.join(data_path, 'x_tunnel')
-
-
 class Front(object):
     name = "cloudflare_front"
 
     def __init__(self):
         self.running = True
-        self.last_host = "www.xx-net.org"
+        self.last_host = "center.xx-net.org"
 
         self.logger = logger
         config_path = os.path.join(module_data_path, "cloudflare_front.json")
         self.config = Config(config_path)
+
+        self.light_config = Config(config_path)
+        self.light_config.dispather_min_workers = 1
+        self.light_config.max_good_ip_num = 10
 
         ca_certs = os.path.join(current_path, "cacert.pem")
         default_domain_fn = os.path.join(current_path, "front_domains.json")
@@ -61,14 +64,19 @@ class Front(object):
         self.dispatchs = {}
 
     def get_dispatcher(self, host=None):
-        if host is None:
+        if not host:
             host = self.last_host
         else:
             self.last_host = host
 
         if host not in self.dispatchs:
+            if host in ["center.xx-net.org", "dns.xx-net.org"]:
+                config = self.light_config
+            else:
+                config = self.config
+
             http_dispatcher = HttpsDispatcher(
-                logger, self.config, self.ip_manager, self.connect_manager,
+                logger, config, self.ip_manager, self.connect_manager,
                 http2worker=CloudflareHttp2Worker)
             self.dispatchs[host] = http_dispatcher
 
@@ -85,10 +93,10 @@ class Front(object):
         status = response.status
         content = response.task.read_all()
         if status == 200:
-            self.logger.debug("%s %s%s status:%d trace:%s", method, response.worker.host, path, status,
+            self.logger.debug("%s %s%s status:%d trace:%s", method, response.worker.ssl_sock.host, path, status,
                        response.task.get_trace())
         else:
-            self.logger.warn("%s %s%s status:%d trace:%s", method, response.worker.host, path, status,
+            self.logger.warn("%s %s%s status:%d trace:%s", method, response.worker.ssl_sock.host, path, status,
                        response.task.get_trace())
         return content, status, response
 

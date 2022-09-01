@@ -55,16 +55,23 @@ response:
 """
 
 import errno
+import sys
 import time
 import xstruct as struct
 import re
 import string
 import ssl
-import urllib.parse
 import threading
 import zlib
 import traceback
 from mimetypes import guess_type
+
+try:
+    from urllib.parse import urlparse, urljoin, urljoin
+except ImportError:
+    from urlparse import urlparse, urljoin, urljoin
+
+from xx_six import ConnectionError, ConnectionResetError, BrokenPipeError, ConnectionAbortedError
 
 from . import check_local_network
 from .front import front
@@ -198,26 +205,24 @@ def send_response(wfile, status=404, headers={}, body=b''):
             send_header(wfile, key, value)
         wfile.write(b"\r\n")
         wfile.write(body)
-    except ConnectionAbortedError as e:
-        xlog.warn("gae send response fail. %r", e)
-        return
-    except ConnectionResetError as e:
-        xlog.warn("gae send response fail: %r", e)
-        return
-    except BrokenPipeError as e:
-        xlog.warn("gae send response fail. %r", e)
-        return
     except ssl.SSLError as e:
         xlog.warn("gae send response fail. %r", e)
         return
     except Exception as e:
-        xlog.exception("send response fail %r", e)
+        if sys.version_info[0] == 3 and (
+                isinstance(e, ConnectionError) or
+                isinstance(e, ConnectionResetError) or
+                isinstance(e, BrokenPipeError)
+        ):
+            xlog.warn("gae send response fail. %r", e)
+        else:
+            xlog.exception("send response fail %r", e)
 
 
 def return_fail_message(wfile):
     html = generate_message_html(
         '504 GAEProxy Proxy Time out', '连接超时，先休息一会再来！')
-    send_response(wfile, 504, body=html.encode('utf-8'))
+    send_response(wfile, 504, body=utils.to_bytes(html))
     return
 
 
@@ -386,7 +391,7 @@ def request_gae_proxy(method, url, headers, body, timeout=None):
 
     host = headers.get(b"Host", b"")
     if not host:
-        parsed_url = urllib.parse.urlparse(url)
+        parsed_url = urlparse(url)
         host = parsed_url.hostname
 
     accept_codes = accept_encoding.replace(b" ", b"").split(b",")
@@ -695,9 +700,11 @@ def handler(method, host, url, headers, body, wfile, fallback=None):
             body_sended = len(data0)
         else:
             body_sended = 0
-    except (BrokenPipeError, ConnectionAbortedError) as e:
-        return
     except Exception as e:
+        if sys.version_info[0] == 3 and \
+                (isinstance(e, BrokenPipeError) or isinstance(e, ConnectionAbortedError)):
+            return
+
         xlog.exception("gae_handler.handler send response fail. e:%r %s", e, url)
         return
 
@@ -720,11 +727,11 @@ def handler(method, host, url, headers, body, wfile, fallback=None):
                 #xlog.debug("send to browser wfile.write ret:%d", ret)
                 #ret = wfile.write(data)
                 wfile.write(data)
-        except BrokenPipeError as e:
-            return
-        except ConnectionAbortedError as e:
-            return
         except Exception as e_b:
+            if sys.version_info[0] == 3 and \
+                    (isinstance(e_b, BrokenPipeError) or isinstance(e_b, ConnectionAbortedError)):
+                return
+
             if e_b.args[0] in (errno.ECONNABORTED, errno.EPIPE,
                           errno.ECONNRESET) or 'bad write retry' in repr(e_b):
                 xlog.info('gae_handler send to browser return %r %r, len:%d, sended:%d', e_b, url, body_length, body_sended)
@@ -830,14 +837,15 @@ class RangeFetch2(object):
                 #xlog.debug("Head %s: %s", key.title(), value)
                 send_header(self.wfile, key, value)
             self.wfile.write(b"\r\n")
-        except (ConnectionAbortedError, BrokenPipeError) as e:
-            self.keep_running = False
-            xlog.warn("RangeFetch send response fail:%r %s", e, self.url)
-            return
         except Exception as e:
             self.keep_running = False
-            xlog.exception("RangeFetch send response fail:%r %s", e, self.url)
-            return
+            if sys.version_info[0] == 3 and \
+                    (isinstance(e, BrokenPipeError) or isinstance(e, ConnectionAbortedError)):
+                xlog.warn("RangeFetch send response fail:%r %s", e, self.url)
+                return
+            else:
+                xlog.exception("RangeFetch send response fail:%r %s", e, self.url)
+                return
 
         data_left_to_fetch = self.req_end - self.req_begin + 1
         fetch_times = int(
@@ -943,7 +951,7 @@ class RangeFetch2(object):
 
             response.status = response.app_status
             if response.headers.get(b'Location', None):
-                self.url = urllib.parse.urljoin(
+                self.url = urljoin(
                     self.url, response.headers.get(b'Location'))
                 xlog.warn('RangeFetch Redirect(%r) status:%s',
                           self.url, response.status)

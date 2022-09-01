@@ -60,8 +60,12 @@ import socket
 import struct
 from errno import EOPNOTSUPP, EINVAL, EAGAIN
 from io import BytesIO, SEEK_CUR
-from collections import Callable
-import encodings.idna
+try:
+    from collections import Callable
+except:
+    from collections.abc import Callable
+
+from six import string_types
 
 current_path = os.path.dirname(os.path.abspath(__file__))
 python_path = os.path.abspath( os.path.join(current_path, os.pardir, os.pardir))
@@ -321,7 +325,7 @@ class socksocket(_BaseSocket):
         username = utils.to_bytes(username)
         password = utils.to_bytes(password)
 
-        if isinstance(proxy_type, str):
+        if isinstance(proxy_type, string_types):
             proxy_type = proxy_type.lower()
             if "http" in proxy_type:
                 proxy_type = PROXY_TYPE_HTTP
@@ -565,7 +569,7 @@ class socksocket(_BaseSocket):
         else:
             if rdns:
                 # Resolve remotely
-                host_bytes = host.encode("idna")
+                host_bytes = host.encode("utf-8")
                 file.write(b"\x03" + chr(len(host_bytes)).encode() + host_bytes)
             else:
                 # Resolve locally
@@ -626,7 +630,7 @@ class socksocket(_BaseSocket):
             # NOTE: This is actually an extension to the SOCKS4 protocol
             # called SOCKS4A and may not be supported in all cases.
             if remote_resolve:
-                writer.write(dest_addr.encode('idna') + b"\x00")
+                writer.write(dest_addr.encode('utf-8') + b"\x00")
             writer.flush()
 
             # Get the response from the server
@@ -750,6 +754,7 @@ class socksocket(_BaseSocket):
             return
 
         proxy_type, proxy_host, proxy_port, rdns, username, password = self.proxy
+        proxy_host = utils.to_bytes(proxy_host)
 
         # Do a minimal input check first
         if not dest_addr or not isinstance(dest_port, int):

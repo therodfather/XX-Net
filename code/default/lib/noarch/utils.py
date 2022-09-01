@@ -5,6 +5,7 @@ import re
 import os
 import threading
 from functools import reduce
+from six import string_types
 
 ipv4_pattern = re.compile(br'^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$')
 
@@ -34,6 +35,7 @@ ipv6_pattern = re.compile(br"""
         \s*                         # Trailing whitespace
         $
     """, re.VERBOSE | re.IGNORECASE | re.DOTALL)
+
 
 def check_ip_valid4(ip):
     """检查ipv4地址的合法性"""
@@ -77,21 +79,22 @@ def get_ip_port(ip_str, port=443):
             # format is ip
             ip = ip_str
     else:
-        #ipv6
+        # ipv6
         if b"[" in ip_str:
             # format: [ab01:12:23:34::1]
             # format: [ab01:12:23:34::1]:23
 
             p1 = ip_str.find(b"[")
             p2 = ip_str.find(b"]")
-            ip = ip_str[p1+1:p2]
-            port_str = ip_str[p2+1:]
+            ip = ip_str[p1 + 1:p2]
+            port_str = ip_str[p2 + 1:]
             if len(port_str) > 0:
                 port = port_str[1:]
         else:
             ip = ip_str
 
     return ip, int(port)
+
 
 domain_allowed = re.compile("(?!-)[A-Z\d-]{1,63}(?<!-)$")
 
@@ -169,8 +172,8 @@ def generate_random_lowercase(n):
     len_lc = 26
     ba = bytearray(os.urandom(n))
     for i, b in enumerate(ba):
-        ba[i] = min_lc + b % len_lc # convert 0..255 to 97..122
-    #sys.stdout.buffer.write(ba)
+        ba[i] = min_lc + b % len_lc  # convert 0..255 to 97..122
+    # sys.stdout.buffer.write(ba)
     return ba
 
 
@@ -218,7 +221,6 @@ private_ipv6_range = [
     ("fc00::", "fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
 ]
 
-
 private_ipv4_range_bin = []
 for b, e in private_ipv4_range:
     bb = ip_string_to_num(b)
@@ -249,11 +251,12 @@ def is_private_ip(ip):
             else:
                 return False
     except Exception as e:
-        print(("is_private_ip(%s), except:%r", ip, e))
+        # print(("is_private_ip(%s), except:%r", ip, e))
         return False
 
 
 import string
+
 printable = set(string.printable)
 
 
@@ -291,7 +294,7 @@ def map_with_parameter(function, datas, args):
 def to_bytes(data, coding='utf-8'):
     if isinstance(data, bytes):
         return data
-    if isinstance(data, str):
+    if isinstance(data, string_types):
         return data.encode(coding)
     if isinstance(data, dict):
         return dict(map_with_parameter(to_bytes, data.items(), coding))
@@ -307,7 +310,7 @@ def to_bytes(data, coding='utf-8'):
 
 
 def to_str(data, coding='utf-8'):
-    if isinstance(data, str):
+    if isinstance(data, string_types):
         return data
     if isinstance(data, bytes):
         return data.decode(coding)
@@ -339,10 +342,16 @@ def bytes2str_only(data, coding='utf-8'):
         return data
 
 
+def merge_two_dict(x, y):
+    """Given two dictionaries, merge them into a new dict as a shallow copy."""
+    z = x.copy()
+    z.update(y)
+    return z
+
+
 if __name__ == '__main__':
-    #print(get_ip_port("1.2.3.4", 443))
-    #print(get_ip_port("1.2.3.4:8443", 443))
+    # print(get_ip_port("1.2.3.4", 443))
+    # print(get_ip_port("1.2.3.4:8443", 443))
     print((get_ip_port("[face:ab1:11::0]", 443)))
     print((get_ip_port("ab01::1", 443)))
     print((get_ip_port("[ab01:55::1]:8444", 443)))
-

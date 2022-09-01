@@ -1,6 +1,8 @@
 import os
 import sys
 import json
+import platform
+
 current_path = os.path.dirname(os.path.abspath(__file__))
 python_path = os.path.abspath(os.path.join(current_path, os.pardir, os.pardir))
 
@@ -31,9 +33,9 @@ def create_data_path():
 create_data_path()
 
 from xlog import getLogger
+xlog = getLogger("x_tunnel", log_path=data_xtunnel_path, save_start_log=500, save_warning_log=True)
 
-xlog = getLogger("x_tunnel")
-
+import os_platform
 import xconfig
 from x_tunnel.local.proxy_handler import Socks5Server
 from x_tunnel.local import global_var as g
@@ -52,7 +54,7 @@ def xxnet_version():
             version = fd.read()
         return version
     except Exception as e:
-        xlog.exception("xxnet_version fail")
+        xlog.exception("get version fail")
     return "get_version_fail"
 
 
@@ -61,7 +63,7 @@ def get_launcher_uuid():
     try:
         with open(launcher_config_fn, "r") as fd:
             info = json.load(fd)
-            return info["update_uuid"]
+            return info.get("update_uuid")
     except Exception as e:
         xlog.exception("get_launcher_uuid except:%r", e)
         return ""
@@ -78,6 +80,7 @@ def load_config():
     config = xconfig.Config(config_path)
 
     config.set_var("log_level", "DEBUG")
+    config.set_var("upload_logs", True)
     config.set_var("write_log_file", 0)
     config.set_var("show_debug", 0)
 
@@ -99,10 +102,11 @@ def load_config():
 
     config.set_var("socks_host", "127.0.0.1")
     config.set_var("socks_port", 1080)
+    config.set_var("update_cloudflare_domains", True)
 
     # performance parameters
     # range 2 - 100
-    config.set_var("concurent_thread_num", 50)
+    config.set_var("concurent_thread_num", 20)
 
     # min roundtrip on road if connectoin exist
     config.set_var("min_on_road", 3)
@@ -128,9 +132,9 @@ def load_config():
 
     # reporter
     config.set_var("timeout_threshold", 2)
-    config.set_var("report_interval", 60)
+    config.set_var("report_interval", 3600*24)
 
-    config.set_var("enable_gae_proxy", 1)
+    config.set_var("enable_gae_proxy", 0)
     config.set_var("enable_cloudflare", 1)
     config.set_var("enable_cloudfront", 0)
     config.set_var("enable_heroku", 0)
@@ -155,12 +159,13 @@ def main(args):
 
     g.xxnet_version = xxnet_version()
     g.client_uuid = get_launcher_uuid()
+    g.system = os_platform.platform + "|" + platform.version() + "|" + str(platform.architecture()) + "|" + sys.version
 
     load_config()
     front_dispatcher.init()
     g.data_path = data_path
 
-    xlog.info("xxnet_version:%s", g.xxnet_version)
+    xlog.info("version:%s", g.xxnet_version)
 
     g.running = True
     if not g.server_host or not g.server_port:

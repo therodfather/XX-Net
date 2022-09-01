@@ -4,6 +4,11 @@ html, body {
     padding: 0;
 }
 
+.container-fluid{
+    padding-left: 1rem;
+    padding-right: 1rem;
+}
+
 button,
 input,
 select,
@@ -48,6 +53,12 @@ select:focus {
     outline: none;
 }
 
+.navbar-fixed-top {
+    position:fixed;
+    top:0;
+    width:100%;
+}
+
 div#header a {
     color: #fff;
     text-decoration: none;
@@ -68,6 +79,7 @@ div#header div#logo img {
 }
 
 div#header a#resize-window-trigger,
+div#header a#menu-button,
 div#header a#quit-trigger {
     display: block;
     padding-top: 8px;
@@ -77,10 +89,15 @@ div#header img {
     max-height: 22px;
 }
 
+.align-right {
+    position: absolute;
+    top: 5px;
+    right: 30px;
+}
 
 div#content {
     margin: 40px auto 0;
-    padding: 40px 0 40px;
+    padding-top: 3rem;
 }
 
 div#content div#sidebar a {
@@ -380,10 +397,6 @@ div#history.tab-pane h4 {
     div#header div#logo {
         text-align: center;
     }
-
-    div#content {
-        padding: 0;
-    }
 }
 
 /* Mobile Landscape Size to Tablet Portrait (devices and browsers) */
@@ -398,4 +411,34 @@ div#history.tab-pane h4 {
     div.container {
         width: 320px;
     }
+}
+
+.config_label {
+    display: inline-block;
+    font-weight: bold;
+    margin: 10px 0 0;
+    max-width:  100%;
+    overflow: hidden;
+}
+.config_switch {
+    float: right;
+    padding-right: 1rem;
+    margin: 10px 0 0;
+}
+
+#loading_animation {
+  height: 250px;
+  top: 50%;
+  text-align: center;
+}
+.p80 {
+  max-width: 600px;
+  text-align: center;
+}
+.plan-block {
+  margin-left: 10px;
+  margin-top: 10px;
+  margin-bottom: 10px;
+  text-align: center;
+
 }

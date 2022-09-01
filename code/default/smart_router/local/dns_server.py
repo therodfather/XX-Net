@@ -82,7 +82,7 @@ class DnsServer(object):
             if sys.platform.startswith("linux"):
                 xlog.warn("You can try: install libcap2-bin")
                 xlog.warn("Then: sudo setcap 'cap_net_bind_service=+ep' /usr/bin/python2.7")
-                xlog.warn("Or run XX-Net as root")
+                xlog.warn("Or run as root")
 
     def on_udp_query(self, rsock, req_data, addr):
         start_time = time.time()
@@ -110,9 +110,9 @@ class DnsServer(object):
             for ip_cn in ips:
                 ipcn_p = ip_cn.split(b"|")
                 ip = ipcn_p[0]
-                if b"." in ip and type == 1:
+                if utils.check_ip_valid4(ip) and type == 1:
                     reply.add_answer(RR(domain, ttl=60, rdata=A(ip)))
-                elif b":" in ip and type == 28:
+                elif utils.check_ip_valid6(ip) and type == 28:
                     reply.add_answer(RR(domain, rtype=type, ttl=60, rdata=AAAA(ip)))
             res_data = reply.pack()
 
@@ -126,7 +126,15 @@ class DnsServer(object):
         while self.running:
             r, w, e = select.select(self.sockets, [], [], 1)
             for rsock in r:
-                data, addr = rsock.recvfrom(1024)
+                if not self.running:
+                    break
+
+                try:
+                    data, addr = rsock.recvfrom(1024)
+                except Exception as e:
+                    xlog.warn("recv except: %r", e)
+                    break
+
                 threading.Thread(target=self.on_udp_query, args=(rsock, data, addr)).start()
 
         self.th = None

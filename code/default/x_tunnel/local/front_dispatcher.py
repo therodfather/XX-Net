@@ -1,5 +1,6 @@
 import time
 import threading
+import os
 
 all_fronts = []
 light_fronts = []
@@ -8,7 +9,13 @@ session_fronts = []
 from . import global_var as g
 
 from xlog import getLogger
-xlog = getLogger("x_tunnel")
+
+current_path = os.path.dirname(os.path.abspath(__file__))
+root_path = os.path.abspath(os.path.join(current_path, os.pardir, os.pardir))
+data_path = os.path.abspath(os.path.join(root_path, os.pardir, os.pardir, 'data'))
+data_xtunnel_path = os.path.join(data_path, 'x_tunnel')
+
+xlog = getLogger("x_tunnel", log_path=data_xtunnel_path, save_start_log=500, save_warning_log=True)
 
 
 def init():
@@ -54,6 +61,20 @@ def init():
     threading.Thread(target=debug_data_clearup_thread).start()
 
 
+def save_cloudflare_domain(domains):
+    if not domains or not g.config.enable_cloudflare:
+        return
+
+    for front in all_fronts:
+        if front.name != "cloudflare_front":
+            continue
+
+        front.config.update_domains = False
+        front.config.save()
+
+        front.host_manager.save_domains(domains)
+
+
 def debug_data_clearup_thread():
     while g.running:
         for front in all_fronts:
@@ -95,6 +116,22 @@ def get_front(host, timeout):
         time.sleep(1)
     g.stat["timeout_roundtrip"] += 5
     return None
+
+
+def count_connection(host):
+    fronts = session_fronts
+
+    num = 0
+    for front in fronts:
+        dispatcher = front.get_dispatcher(host)
+        if not dispatcher:
+            continue
+
+        num += len(dispatcher.workers)
+
+        num += dispatcher.connection_manager.new_conn_pool.qsize()
+
+    return num
 
 
 def request(method, host, path="/", headers={}, data="", timeout=100):

@@ -11,21 +11,35 @@ if __name__ == "__main__":
 
 import re
 import socket, ssl
-import urllib.parse
-import urllib.request, urllib.error, urllib.parse
 import time
 import threading
-
-root_path = os.path.abspath(os.path.join(current_path, os.pardir))
-
 import json
 import cgi
 
+try:
+    from urllib.parse import urlparse, urlencode, parse_qs
+    from urllib.request import urlopen, Request
+    from urllib.error import HTTPError
+except ImportError:
+    from urlparse import urlparse, parse_qs
+    from urllib import urlencode
+    from urllib2 import urlopen, Request, HTTPError
+
+try:
+    from urllib.request import ProxyHandler
+    from urllib.request import build_opener
+except ImportError:
+    from urllib2 import ProxyHandler
+    from urllib2 import build_opener
+
+root_path = os.path.abspath(os.path.join(current_path, os.pardir))
+
 import sys_platform
 from xlog import getLogger
+
 xlog = getLogger("launcher")
 import module_init
-from config import config
+from config import config, valid_language, app_name
 import autorun
 import update
 import update_from_github
@@ -36,10 +50,13 @@ from simple_i18n import SimpleI18N
 
 NetWorkIOError = (socket.error, ssl.SSLError, OSError)
 
-i18n_translator = SimpleI18N(config.language)
-
-
+current_version = utils.to_bytes(update_from_github.current_version())
+i18n_translator = SimpleI18N()
+i18n_translator.add_translate(b"APP_NAME", utils.to_bytes(app_name))
+i18n_translator.add_translate(b"APP_VERSION", current_version)
 module_menus = {}
+
+
 class Http_Handler(simple_http_server.HttpServerHandler):
     deploy_proc = None
 
@@ -63,7 +80,7 @@ class Http_Handler(simple_http_server.HttpServerHandler):
             new_module_menus[module] = module_menu
 
         module_menus = sorted(iter(new_module_menus.items()), key=lambda k_and_v: (k_and_v[1]['menu_sort_id']))
-        #for k,v in self.module_menus:
+        # for k,v in self.module_menus:
         #    xlog.debug("m:%s id:%d", k, v['menu_sort_id'])
 
     def do_POST(self):
@@ -72,27 +89,33 @@ class Http_Handler(simple_http_server.HttpServerHandler):
 
         refer = self.headers.get('Referer')
         if refer:
-            refer_loc = urllib.parse.urlparse(refer).netloc
+            refer_loc = urlparse(refer).netloc
             host = self.headers.get('Host')
             if refer_loc != host:
                 xlog.warn("web control ref:%s host:%s", refer_loc, host)
                 return
 
         try:
-            ctype, pdict = cgi.parse_header(self.headers.get('Content-Type', ""))
+            content_type = self.headers.get('Content-Type', "")
+            ctype, pdict = cgi.parse_header(content_type)
             if ctype == 'multipart/form-data':
                 self.postvars = cgi.parse_multipart(self.rfile, pdict)
             elif ctype == 'application/x-www-form-urlencoded':
                 length = int(self.headers.get('Content-Length'))
-                self.postvars = urllib.parse.parse_qs(self.rfile.read(length), keep_blank_values=True)
+                content = self.rfile.read(length)
+                self.postvars = parse_qs(content, keep_blank_values=True)
+            elif ctype == 'application/json':
+                length = int(self.headers.get('Content-Length'))
+                content = self.rfile.read(length)
+                self.postvars = json.loads(content)
             else:
                 self.postvars = {}
         except Exception as e:
             xlog.exception("do_POST %s except:%r", self.path, e)
             self.postvars = {}
 
-        #url_path = urlparse.urlparse(self.path).path
         url_path_list = self.path.split('/')
+        url_path = urlparse(self.path).path
         if len(url_path_list) >= 3 and url_path_list[1] == "module":
             module = url_path_list[2]
             if len(url_path_list) >= 4 and url_path_list[3] == "control":
@@ -101,20 +124,28 @@ class Http_Handler(simple_http_server.HttpServerHandler):
                     return self.send_not_found()
 
                 path = '/' + '/'.join(url_path_list[4:])
-                controler = module_init.proc_handler[module]["imp"].local.web_control.ControlHandler(self.client_address, self.headers, self.command, path, self.rfile, self.wfile)
+                controler = module_init.proc_handler[module]["imp"].local.web_control. \
+                    ControlHandler(self.client_address, self.headers, self.command, path, self.rfile, self.wfile)
                 controler.postvars = utils.to_str(self.postvars)
-                return controler.do_POST()
+                try:
+                    controler.do_POST()
+                    return
+                except Exception as e:
+                    xlog.exception("POST %s except:%r", path, e)
+
+        elif url_path == "/set_proxy_applist":
+            return self.set_proxy_applist()
 
         self.send_not_found()
         xlog.info('%s "%s %s HTTP/1.1" 404 -', self.address_string(), self.command, self.path)
 
     def do_GET(self):
-        self.headers = utils.to_str(self.headers)
+        # self.headers = utils.to_str(self.headers)
         self.path = utils.to_str(self.path)
 
         refer = self.headers.get('Referer')
         if refer:
-            refer_loc = urllib.parse.urlparse(refer).netloc
+            refer_loc = urlparse(refer).netloc
             host = self.headers.get('Host')
             if refer_loc != host:
                 xlog.warn("web control ref:%s host:%s", refer_loc, host)
@@ -126,7 +157,7 @@ class Http_Handler(simple_http_server.HttpServerHandler):
             xlog.warn('%s %s %s haking', self.address_string(), self.command, self.path)
             return
 
-        url_path = urllib.parse.urlparse(self.path).path
+        url_path = urlparse(self.path).path
         if url_path == '/':
             return self.req_index_handler()
 
@@ -145,7 +176,8 @@ class Http_Handler(simple_http_server.HttpServerHandler):
                     return
 
                 path = '/' + '/'.join(url_path_list[4:])
-                controler = module_init.proc_handler[module]["imp"].local.web_control.ControlHandler(self.client_address, self.headers, self.command, path, self.rfile, self.wfile)
+                controler = module_init.proc_handler[module]["imp"].local.web_control.ControlHandler(
+                    self.client_address, self.headers, self.command, path, self.rfile, self.wfile)
                 controler.do_GET()
                 return
             else:
@@ -183,11 +215,19 @@ class Http_Handler(simple_http_server.HttpServerHandler):
                 self.req_update_handler()
             elif url_path == '/config_proxy':
                 self.req_config_proxy_handler()
+            elif url_path == '/installed_app':
+                self.req_get_installed_app()
             elif url_path == '/init_module':
                 self.req_init_module_handler()
             elif url_path == '/quit':
-                self.send_response('text/html', '{"status":"success"}')
-                sys_platform.sys_tray.on_quit(None)
+                content = b'Exited successfully.'
+                self.send_response('text/html', content)
+                self.wfile.flush()
+
+                if sys_platform.platform == "android":
+                    simple_http_client.request("GET", "http://localhost:8084/quit/", timeout=0.2)
+
+                sys_platform.on_quit()
             elif url_path == "/debug":
                 self.req_debug_handler()
             elif url_path == '/restart':
@@ -198,8 +238,8 @@ class Http_Handler(simple_http_server.HttpServerHandler):
                 xlog.info('%s "%s %s HTTP/1.1" 404 -', self.address_string(), self.command, self.path)
 
     def req_index_handler(self):
-        req = urllib.parse.urlparse(self.path).query
-        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        req = urlparse(self.path).query
+        reqs = parse_qs(req, keep_blank_values=True)
 
         try:
             target_module = reqs['module'][0]
@@ -223,37 +263,52 @@ class Http_Handler(simple_http_server.HttpServerHandler):
 
         # i18n code lines (Both the locale dir & the template dir are module-dependent)
         locale_dir = os.path.abspath(os.path.join(current_path, 'lang'))
-        index_content = i18n_translator.render(locale_dir, os.path.join(current_path, "web_ui", "index.html"))
+        fn = os.path.join(current_path, "web_ui", "index.html")
+        try:
+            index_content = i18n_translator.render(locale_dir, fn)
+        except Exception as e:
+            xlog.warn("render %s except:%r", fn, e)
+            return self.send_not_found()
 
-        current_version = utils.to_bytes(update_from_github.current_version())
         menu_content = b''
         for module, v in module_menus:
-            #xlog.debug("m:%s id:%d", module, v['menu_sort_id'])
+            # xlog.debug("m:%s id:%d", module, v['menu_sort_id'])
             title = v["module_title"]
             menu_content += b'<li class="nav-header">%s</li>\n' % utils.to_bytes(title)
             for sub_id in v['sub_menus']:
+                list_meta = b''
+                web_id = v['sub_menus'][sub_id].get("id")
+                if web_id:
+                    list_meta += b' id="%s"' % sub_id
+
                 sub_title = v['sub_menus'][sub_id]['title']
-                sub_url = v['sub_menus'][sub_id]['url']
-                if target_module == module and target_menu == sub_url:
-                    active = b'class="active"'
-                else:
-                    active = b''
-                menu_content += b'<li %s><a href="/?module=%s&menu=%s">%s</a></li>\n' % utils.to_bytes( (active, module, sub_url, sub_title) )
+                if "url" in v['sub_menus'][sub_id]:
+                    sub_url = v['sub_menus'][sub_id]['url']
+                    if target_module == module and target_menu == sub_url:
+                        list_meta += b'class="active"'
+
+                    menu_content += b'<li %s><a href="/?module=%s&menu=%s">%s</a></li>\n' % utils.to_bytes(
+                        (list_meta, module, sub_url, sub_title))
+                elif "api_url" in v['sub_menus'][sub_id]:
+                    api_url = v['sub_menus'][sub_id]["api_url"]
+                    menu_content += b'<li %s><a href="%s">%s</a></li>\n' % utils.to_bytes(
+                        (list_meta, api_url, sub_title))
 
         right_content_file = os.path.join(root_path, target_module, "web_ui", target_menu + ".html")
         if os.path.isfile(right_content_file):
             # i18n code lines (Both the locale dir & the template dir are module-dependent)
             locale_dir = os.path.abspath(os.path.join(root_path, target_module, 'lang'))
-            right_content = i18n_translator.render(locale_dir, os.path.join(root_path, target_module, "web_ui", target_menu + ".html"))
+            right_content = i18n_translator.render(locale_dir, os.path.join(root_path, target_module, "web_ui",
+                                                                            target_menu + ".html"))
         else:
             right_content = b""
 
-        data = index_content % (current_version, current_version, menu_content, right_content )
+        data = index_content % (menu_content, right_content)
         self.send_response('text/html', data)
 
     def req_config_handler(self):
-        req = urllib.parse.urlparse(self.path).query
-        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        req = urlparse(self.path).query
+        reqs = parse_qs(req, keep_blank_values=True)
         data = ''
 
         if reqs['cmd'] == ['get_config']:
@@ -264,12 +319,14 @@ class Http_Handler(simple_http_server.HttpServerHandler):
                 allow_remote_connect = config.allow_remote_connect
 
             dat = {
+                "platform": sys_platform.platform,
                 "check_update": config.check_update,
                 "language": config.language or i18n_translator.lang,
                 "popup_webui": config.popup_webui,
                 "allow_remote_connect": allow_remote_connect,
                 "allow_remote_switch": config.allow_remote_connect,
                 "show_systray": config.show_systray,
+                "show_android_notification": config.show_android_notification,
                 "auto_start": config.auto_start,
                 "show_detail": config.gae_show_detail,
                 "gae_proxy_enable": config.enable_gae_proxy,
@@ -308,7 +365,7 @@ class Http_Handler(simple_http_server.HttpServerHandler):
             elif 'language' in reqs:
                 language = reqs['language'][0]
 
-                if language not in i18n_translator.get_valid_languages():
+                if language not in valid_language:
                     data = '{"res":"fail, language:%s"}' % language
                 else:
                     config.language = language
@@ -365,6 +422,15 @@ class Http_Handler(simple_http_server.HttpServerHandler):
                     data = '{"res":"fail, show_systray:%s"}' % show_systray
                 else:
                     config.show_systray = show_systray
+                    config.save()
+
+                    data = '{"res":"success"}'
+            elif 'show_android_notification' in reqs:
+                show_android_notification = int(reqs['show_android_notification'][0])
+                if show_android_notification != 0 and show_android_notification != 1:
+                    data = '{"res":"fail, show_systray:%s"}' % show_android_notification
+                else:
+                    config.show_android_notification = show_android_notification
                     config.save()
 
                     data = '{"res":"success"}'
@@ -449,7 +515,7 @@ class Http_Handler(simple_http_server.HttpServerHandler):
                 if smart_router_enable != 0 and smart_router_enable != 1:
                     data = '{"res":"fail, smart_router_enable:%s"}' % smart_router_enable
                 else:
-                    config.enable_smart_router =  smart_router_enable
+                    config.enable_smart_router = smart_router_enable
                     config.save()
                     if smart_router_enable:
                         module_init.start("smart_router")
@@ -474,8 +540,8 @@ class Http_Handler(simple_http_server.HttpServerHandler):
         self.send_response('text/html', data)
 
     def req_update_handler(self):
-        req = urllib.parse.urlparse(self.path).query
-        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        req = urlparse(self.path).query
+        reqs = parse_qs(req, keep_blank_values=True)
         data = ''
 
         if reqs['cmd'] == ['get_info']:
@@ -494,7 +560,8 @@ class Http_Handler(simple_http_server.HttpServerHandler):
         elif reqs['cmd'] == ['get_new_version']:
             current_version = update_from_github.current_version()
             github_versions = update_from_github.get_github_versions()
-            data = '{"res":"success", "test_version":"%s", "stable_version":"%s", "current_version":"%s"}' % (github_versions[0][1], github_versions[1][1], current_version)
+            data = '{"res":"success", "test_version":"%s", "stable_version":"%s", "current_version":"%s"}' % (
+            github_versions[0][1], github_versions[1][1], current_version)
             xlog.info("%s", data)
         elif reqs['cmd'] == ['update_version']:
             version = reqs['version'][0]
@@ -530,8 +597,8 @@ class Http_Handler(simple_http_server.HttpServerHandler):
         self.send_response('text/html', data)
 
     def req_config_proxy_handler(self):
-        req = urllib.parse.urlparse(self.path).query
-        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        req = urlparse(self.path).query
+        reqs = parse_qs(req, keep_blank_values=True)
         data = ''
 
         if reqs['cmd'] == ['get_config']:
@@ -575,9 +642,78 @@ class Http_Handler(simple_http_server.HttpServerHandler):
             data = '{"res":"success"}'
         self.send_response('text/html', data)
 
+    def req_get_installed_app(self):
+        if sys_platform.platform != 'android':
+            # simulate data for developing
+            data = {
+                "proxy_by_app": config.proxy_by_app,
+                "installed_app_list": [
+                    {
+                        "name": "Test",
+                        "package": "com.test"
+                    },{
+                        "name": "APP",
+                        "package": "com.app"
+                    },{
+                        "name": "com.google.foundation.Foundation.Application.",
+                        "package": "com.google.application"
+                    }
+                ]
+            }
+            time.sleep(5)
+        else:
+            res = simple_http_client.request("GET", "http://localhost:8084/installed_app_list/")
+            data = json.loads(res.text)
+            data["proxy_by_app"] = config.proxy_by_app
+
+        for app in data["installed_app_list"]:
+            package = app["package"]
+            if package in config.enabled_app_list:
+                app["enable"] = True
+            else:
+                app["enable"] = False
+
+        if config.proxy_by_app:
+            # Pass the config in html.
+            content = '<div id="proxy_by_app_config" checked hidden></div>'
+        else:
+            content = '<div id="proxy_by_app_config" hidden></div>'
+
+        for app in data["installed_app_list"]:
+            if app["enable"]:
+                checked = " checked "
+            else:
+                checked = ""
+
+            content += '<div class="row-fluid"> <div class="config_label" >'\
+                        + app["name"] \
+                        + '</div><div class="config_switch"><input class="app_item" id="'\
+                        + app['package']\
+                        + '" type="checkbox" data-toggle="switch" '\
+                        + checked\
+                        + '/></div></div>\n'\
+
+        # jquery can't work on dynamic insert elements.
+        # load html content from backend is the best way to make it works.
+
+        return self.send_response("text/html", content)
+
+    def set_proxy_applist(self):
+        xlog.debug("set_proxy_applist %r", self.postvars)
+        config.proxy_by_app = int(self.postvars.get(b'proxy_by_app') == [b"true"])
+        config.enabled_app_list = utils.to_str(self.postvars.get(b"enabled_app_list[]", []))
+        xlog.debug("set_proxy_applist proxy_by_app:%s", config.proxy_by_app)
+        xlog.debug("set_proxy_applist enabled_app_list:%s", config.enabled_app_list)
+        config.save()
+
+        data = {
+            "res": "success"
+        }
+        self.send_response("text/html", json.dumps(data))
+
     def req_init_module_handler(self):
-        req = urllib.parse.urlparse(self.path).query
-        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        req = urlparse(self.path).query
+        reqs = parse_qs(req, keep_blank_values=True)
         data = ''
 
         try:
@@ -593,7 +729,8 @@ class Http_Handler(simple_http_server.HttpServerHandler):
             elif reqs['cmd'] == ['restart']:
                 result_stop = module_init.stop(module)
                 result_start = module_init.start(module)
-                data = '{ "module": "%s", "cmd": "restart", "stop_result": "%s", "start_result": "%s" }' % (module, result_stop, result_start)
+                data = '{ "module": "%s", "cmd": "restart", "stop_result": "%s", "start_result": "%s" }' % (
+                module, result_stop, result_start)
         except Exception as e:
             xlog.exception("init_module except:%s", e)
 
@@ -601,8 +738,8 @@ class Http_Handler(simple_http_server.HttpServerHandler):
 
     def req_debug_handler(self):
         global mem_stat
-        req = urllib.parse.urlparse(self.path).query
-        reqs = urllib.parse.parse_qs(req, keep_blank_values=True)
+        req = urlparse(self.path).query
+        reqs = parse_qs(req, keep_blank_values=True)
 
         try:
             import tracemalloc
@@ -657,6 +794,7 @@ class Http_Handler(simple_http_server.HttpServerHandler):
         except Exception as e:
             xlog.exception("debug:%r", e)
             self.send_response("text/html", "no mem_top")
+
 
 mem_stat = None
 
@@ -745,13 +883,13 @@ def stop():
 
 
 def http_request(url, method="GET"):
-    proxy_handler = urllib.request.ProxyHandler({})
-    opener = urllib.request.build_opener(proxy_handler)
+    proxy_handler = ProxyHandler({})
+    opener = build_opener(proxy_handler)
     try:
         req = opener.open(url, timeout=30)
         return req
     except Exception as e:
-        #xlog.exception("web_control http_request:%s fail:%s", url, e)
+        # xlog.exception("web_control http_request:%s fail:%s", url, e)
         return False
 
 
@@ -761,7 +899,7 @@ def confirm_xxnet_not_running():
     xlog.debug("start confirm_xxnet_exit")
 
     for i in range(30):
-        host_port = config.control_port = 8085  # web_control(default port:8085)
+        host_port = config.control_port
         req_url = "http://127.0.0.1:{port}/quit".format(port=host_port)
         if http_request(req_url) == False:
             xlog.debug("good, xxnet:%s clear!" % host_port)
@@ -788,7 +926,7 @@ def confirm_module_ready(port):
 
         content = req.read(1024)
         req.close()
-        #xlog.debug("cert_import_ready return:%s", content)
+        # xlog.debug("cert_import_ready return:%s", content)
         if content == "True":
             return True
         else:
@@ -798,4 +936,4 @@ def confirm_module_ready(port):
 
 if __name__ == "__main__":
     pass
-    #confirm_xxnet_exit()
+    # confirm_xxnet_exit()

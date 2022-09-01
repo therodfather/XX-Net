@@ -1,8 +1,12 @@
 import time
 import socket
 import struct
-import urllib.parse
 import select
+
+try:
+    from urllib.parse import urlparse
+except ImportError:
+    from urlparse import urlparse
 
 from . import pac_server
 from . import global_var as g
@@ -224,7 +228,10 @@ class ProxyServer():
         sock.send(reply)
 
         # xlog.debug("Socks4:%r to %s:%d", self.client_address, addr, port)
-        handle_ip_proxy(sock, addr, port, self.client_address)
+        if domain_mode:
+            handle_domain_proxy(sock, addr, port, self.client_address)
+        else:
+            handle_ip_proxy(sock, addr, port, self.client_address)
 
     def socks5_handler(self):
         sock = self.conn
@@ -325,7 +332,7 @@ class ProxyServer():
             return
 
         if url.lower().startswith(b"http://"):
-            o = urllib.parse.urlparse(url)
+            o = urlparse(url)
             host, port = netloc_to_host_port(o.netloc)
 
             url_prex_len = url[7:].find(b"/")

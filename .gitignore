@@ -7,7 +7,7 @@ data
 *.mo
 *.xpi
 *pybabel_update.sh
-
+core
 .DS_Store
 desktop.ini
 /SwitchyOmega/AutoProxy.xpi
@@ -15,3 +15,6 @@ desktop.ini
 /code/default/gae_proxy/server/lib/
 /code/default/gae_proxy/local/ipv6_tunnel/enable_ipv6_temp.bat
 /code/default/gae_proxy/local/ipv6_tunnel/set_best_server_temp.bat
+.pytest_cache
+*.log
+code/version.txt

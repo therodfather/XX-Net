@@ -1,10 +1,5 @@
 import os
 import sys
-from . import apis
-
-from xlog import getLogger
-xlog = getLogger("smart_router")
-xlog.set_buffer(500)
 
 current_path = os.path.dirname(os.path.abspath(__file__))
 launcher_path = os.path.abspath( os.path.join(current_path, os.pardir, os.pardir, "launcher"))
@@ -14,6 +9,13 @@ data_path = os.path.abspath(os.path.join(root_path, os.pardir, os.pardir, 'data'
 if launcher_path not in sys.path:
     sys.path.append(launcher_path)
 
+
+if not os.path.isdir(data_path):
+    os.mkdir(data_path)
+
+from xlog import getLogger
+xlog = getLogger("smart_router", log_path=data_path, save_start_log=200, save_warning_log=True)
+xlog.set_buffer(500)
 
 import xconfig
 import simple_http_server
@@ -25,6 +27,7 @@ except:
     proc_handler = None
 
 
+from . import apis
 from . import global_var as g
 from . import dns_server
 from . import dns_query
@@ -48,8 +51,6 @@ def is_ready():
 
 def load_config():
     global g
-    if not os.path.isdir(data_path):
-        os.mkdir(data_path)
 
     config_path = os.path.join(data_path, 'config.json')
     config = xconfig.Config(config_path)
@@ -74,13 +75,13 @@ def load_config():
     config.set_var("dns_ttl", 60*30)
     config.set_var("direct_split_SNI", 1)
 
-    config.set_var("pac_policy", "black_GAE")
+    config.set_var("pac_policy", "black_X-Tunnel")
     config.set_var("country_code", "CN")
     config.set_var("auto_direct", 1)
     config.set_var("auto_direct6", 0)
     config.set_var("auto_gae", 1)
     config.set_var("enable_fake_ca", 1)
-    config.set_var("block_advertisement", 1)
+    config.set_var("block_advertisement", 0)
 
     config.set_var("log_debug", 0)
 

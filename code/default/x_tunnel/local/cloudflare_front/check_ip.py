@@ -46,6 +46,7 @@ from front_base.host_manager import HostManagerBase
 
 from cloudflare_front.config import Config
 from cloudflare_front import front
+from cloudflare_front.host_manager import HostManager
 
 
 def check_all_domain(check_ip):
@@ -117,11 +118,18 @@ class CheckAllIp(object):
 
 
 def check_all_ip(check_ip):
+
+    host_manager.HostManager(config, logger, default_domain_fn, domain_fn, front)
     check = CheckAllIp(check_ip, "scan1.movistar.gq")
     check.run()
 
 
 if __name__ == "__main__":
+
+    config_path = os.path.join(module_data_path, "cloudflare_front.json")
+    config = Config(config_path)
+    default_domain_fn = os.path.join(current_path, "front_domains.json")
+    domain_fn = os.path.join(module_data_path, "cloudflare_domains.json")
     # format: [ip] [domain [sni] ]
 
     # case 1: only ip
@@ -130,8 +138,9 @@ if __name__ == "__main__":
     # case 4: domain
     # case 5: domain sni
 
-    ip = "141.101.120.131"
-    host = "v3.freena.cf"
+    # ip = "141.101.120.131"
+    ip = "162.159.217.3"
+    host = "v3.pc-nvme.shop"
     sni = host
 
     args = list(sys.argv[1:])
@@ -154,9 +163,6 @@ if __name__ == "__main__":
 
     wait_time = 0
 
-    config_path = os.path.join(module_data_path, "cloudflare_front.json")
-    config = Config(config_path)
-
     ca_certs = os.path.join(current_path, "cacert.pem")
     openssl_context = SSLContext(logger, ca_certs=ca_certs)
     host_manager = HostManagerBase()
@@ -176,4 +182,3 @@ if __name__ == "__main__":
 
     front.stop()
     sys.exit(0)
-    exit(0)

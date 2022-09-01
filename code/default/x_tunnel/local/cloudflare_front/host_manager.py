@@ -16,16 +16,17 @@ class HostManager(HostManagerBase):
         self.default_fn = default_fn
         self.fn = fn
         self.front = front
-        self.load()
+        self.ns = self.load()
+        self.ns_idx = random.randint(0, len(self.ns))
         if self.config.update_domains:
             threading.Thread(target=self.update_front_domains).start()
         
     def load(self):
+        lns = []
         for fn in [self.fn, self.default_fn]:
             if not os.path.isfile(fn):
                 continue
 
-            lns = []
             try:
                 with open(fn, "r") as fd:
                     ds = json.load(fd)
@@ -33,15 +34,21 @@ class HostManager(HostManagerBase):
                         subs = ds[top]
                         subs = [str(s) for s in subs]
                         lns.append([str(top), subs])
-                self.ns = lns
                 self.logger.info("load %s success", fn)
-                return True
+                break
             except Exception as e:
                 self.logger.warn("load %s for host fail.", fn)
+        return lns
 
     def get_sni_host(self, ip):
-        top_domain, subs = random.choice(self.ns)
+        ns_num = len(self.ns)
+        if ns_num == 0:
+            return None, None
+
+        i = self.ns_idx % ns_num
+        top_domain, subs = self.ns[i]
         sni = random.choice(subs)
+        self.ns_idx += 1
         
         return sni, top_domain
 
@@ -77,6 +84,10 @@ class HostManager(HostManagerBase):
                 if isinstance(content, memoryview):
                     content = content.tobytes()
 
+                if not self.config.update_domains:
+                    # check again to avoid network delay issue.
+                    return
+
                 need_update = True
                 front_domains_fn = self.fn
                 if os.path.exists(front_domains_fn):
@@ -96,3 +107,20 @@ class HostManager(HostManagerBase):
             except Exception as e:
                 next_update_time = time.time() + (1800)
                 self.logger.exception("updated cloudflare front domains from github fail:%r", e)
+
+    def save_domains(self, domains):
+        ns = []
+        for top, subs in self.ns:
+            ns.append(top)
+
+        if ns == self.ns:
+            return
+
+        dat = {}
+        for domain in domains:
+            dat[domain] = ["www." + domain]
+
+        with open(self.fn, "w") as fd:
+            json.dump(dat, fd)
+
+        self.ns = self.load()

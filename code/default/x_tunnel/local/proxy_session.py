@@ -1,3 +1,4 @@
+import os
 import time
 import json
 import threading
@@ -11,6 +12,10 @@ from . import base_container
 import encrypt
 from . import global_var as g
 from gae_proxy.local import check_local_network
+from .upload_logs import upload_logs_thread
+
+current_path = os.path.dirname(os.path.abspath(__file__))
+root_path = os.path.abspath(os.path.join(current_path, os.pardir, os.pardir))
 
 
 def encrypt_data(data):
@@ -76,6 +81,9 @@ class ProxySession(object):
         if g.config.enable_tls_relay:
             threading.Thread(target=self.reporter).start()
 
+        if g.config.upload_logs:
+            threading.Thread(target=upload_logs_thread).start()
+
     def start(self):
         with self.lock:
             if self.running is True:
@@ -120,7 +128,7 @@ class ProxySession(object):
 
     def stop(self):
         if not self.running:
-            xlog.warn("session stop but not running")
+            # xlog.warn("session stop but not running")
             return
 
         with self.lock:
@@ -216,7 +224,7 @@ class ProxySession(object):
             if not front:
                 continue
             name = front.name
-            dispatcher = front.get_dispatcher()
+            dispatcher = front.get_dispatcher(g.server_host)
             if not dispatcher:
                 res[name] = {
                     "score": "False",
@@ -309,10 +317,8 @@ class ProxySession(object):
                                                bytes(self.session_id),
                                                g.config.max_payload, g.config.send_delay, g.config.windows_size,
                                                int(g.config.windows_ack), g.config.resend_timeout, g.config.ack_delay)
-                upload_data_head += struct.pack("<H", len(g.config.login_account)) + bytes(g.config.login_account,
-                                                                                           encoding='iso-8859-1')
-                upload_data_head += struct.pack("<H", len(g.config.login_password)) + bytes(g.config.login_password,
-                                                                                            encoding='iso-8859-1')
+                upload_data_head += struct.pack("<H", len(g.config.login_account)) + utils.to_bytes(g.config.login_account)
+                upload_data_head += struct.pack("<H", len(g.config.login_password)) + utils.to_bytes(g.config.login_password)
 
                 upload_post_data = encrypt_data(upload_data_head)
 
@@ -401,10 +407,12 @@ class ProxySession(object):
         xlog.debug("stop all connection finished")
 
     def remove_conn(self, conn_id):
-        xlog.debug("remove conn:%d", conn_id)
         try:
+            conn = self.conn_list[conn_id]
+            xlog.debug("remove conn:%d %s:%d", conn_id, conn.host, conn.port)
             del self.conn_list[conn_id]
         except:
+            xlog.debug("remove conn:%d", conn_id)
             pass
 
         if len(self.conn_list) == 0:
@@ -632,8 +640,11 @@ class ProxySession(object):
                 traffic = len(upload_post_data) + len(content) + 645
                 self.traffic += traffic
                 g.quota -= traffic
+                if g.quota < 0:
+                    g.quota = 0
             except Exception as e:
-                xlog.exception("request except:%r ", e)
+                if self.running:
+                    xlog.exception("request except:%r ", e)
 
                 time.sleep(sleep_time)
                 continue
@@ -880,6 +891,17 @@ def call_api(path, req_info):
 center_login_process = False
 
 
+def get_app_name():
+    app_info_file = os.path.join(root_path, os.path.pardir, "app_info.json")
+    try:
+        with open(app_info_file, "r") as fd:
+            dat = json.load(fd)
+        return dat["app_name"]
+    except Exception as e:
+        xlog.exception("get version fail:%r", e)
+    return "XX-Net"
+
+
 def request_balance(account=None, password=None, is_register=False, update_server=True, promoter=""):
     global center_login_process
     if not g.config.api_server:
@@ -901,8 +923,16 @@ def request_balance(account=None, password=None, is_register=False, update_serve
         account = g.config.login_account
         password = g.config.login_password
 
-    req_info = {"account": account, "password": password, "protocol_version": "2",
-                "promoter": promoter}
+    app_name = get_app_name()
+    req_info = {
+        "account": account,
+        "password": password,
+        "protocol_version": "2",
+        "promoter": promoter,
+        "app_id": app_name,
+        "client_version": g.xxnet_version,
+        "sys_info": g.system,
+    }
 
     try:
         center_login_process = True
@@ -929,6 +959,9 @@ def request_balance(account=None, password=None, is_register=False, update_serve
             xlog.info("update xt_server %s:%d", g.server_host, g.server_port)
 
         g.selectable = info["selectable"]
+
+        if g.config.update_cloudflare_domains:
+            g.http_client.save_cloudflare_domain(info.get("cloudflare_domains"))
 
         g.promote_code = info["promote_code"]
         g.promoter = info["promoter"]
